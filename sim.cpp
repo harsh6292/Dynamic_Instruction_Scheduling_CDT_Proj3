@@ -204,35 +204,19 @@ int main(int agrc, char* argv[])
 	do
 	{
 		
-		//printf("\n\n\n************************  NEW_CYCLE() %d **************************\n", (count_Cycle));
-		//printf("\n---------------------------------------------------------------------------FAKE-ROB----");
 		fake_retire();
-		//printf("\nFAKE-ROB Done!");
-		
-		//printf("\n-------------------------------------------------------------EXECUTE()-----------------");
 		execute(traceFile, sched_Q, execute_Q);
-		//printf("\nEXECUTE() Done!, sched-Q size: %d, dispatch_Q_Size: %d, exec_Q size: %d", sched_Q_size, dispatch_Q_Size, issue_List_Size);
-		
-		//printf("\n------------------------------------------------ISSUE()--------------------------------");
 		issue(traceFile, sched_Q, execute_Q);
-		//printf("\nISSUE() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
-		
-		//printf("\n---------------------------DISPATCH()-------------------------------------------------");
 		dispatch(traceFile, dispatch_Q, sched_Q);
-		//printf("\nDISPATCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
-		
-		//printf("\n-------------FETCH()------------------------------------------------------------------");
 		fetch(traceFile, dispatch_Q);
-		//printf("\nFETCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
+		
 		count_Cycle++;
-		//if(count_Cycle == 200)
-			//break;
+		
 	}while(advance_cycle() == 1);
 
-	//printf("\n");
-//	printf("\n\n------------------  FINISH()  -------------\n\n");
+
+	//Final Values after all cycles are completed
 	count_Cycle--;
-	//printf("\nFinal cycle count: %d", count_Cycle);
 	
 	if( l1Cache.c_size!= 0)
 	{
@@ -473,123 +457,122 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 	
 	insertionSortList(dispatch_Q, (2*peak_N_size) );
 	
+	
+	for( i =0; i<((int)(2*peak_N_size)); i++)
 	{
-		for( i =0; i<((int)(2*peak_N_size)); i++)
+		if(sched_Q_size < max_S_value)
 		{
-			if(sched_Q_size < max_S_value)
+			//printf("\nDISPatcH(): sched_Q %d < max_S_value %d", sched_Q_size, max_S_value);
+			if( (dispatch_Q[i] != -1) && (fake_ROB[dispatch_Q[i]].intr_state == ID) )
 			{
-				//printf("\nDISPatcH(): sched_Q %d < max_S_value %d", sched_Q_size, max_S_value);
-				if( (dispatch_Q[i] != -1) && (fake_ROB[dispatch_Q[i]].intr_state == ID) )
+				//printf("\nDISPatcH(): sched_Q size=%d < max_S_value=%d,    and dispatch_Q[%d] = %d", sched_Q_size, max_S_value, i, dispatch_Q[i]);
+				//if( fake_ROB[dispatch_Q[i]].seq_Number == minTagValue)
 				{
-					//printf("\nDISPatcH(): sched_Q size=%d < max_S_value=%d,    and dispatch_Q[%d] = %d", sched_Q_size, max_S_value, i, dispatch_Q[i]);
-					//if( fake_ROB[dispatch_Q[i]].seq_Number == minTagValue)
+					if( (tempPos = return_Queue_position(sched_Q, max_S_value)) != -1)
 					{
-						if( (tempPos = return_Queue_position(sched_Q, max_S_value)) != -1)
+						//printf("\nDipatching Instr: %d into sched-Q[%d]", fake_ROB[dispatch_Q[i]].seq_Number, tempPos );
+						sched_Q[tempPos] = dispatch_Q[i];
+						sched_Q_size++;
+						dispatch_Q_Size--;
+
+						//minTagValue += 1;
+						
+						fake_ROB[dispatch_Q[i]].intr_state = IS;
+
+						src1Ready = NOTREADY;
+						src2Ready = NOTREADY;
+
+						
+						//printf("\nInstr: %d  has SRC1: %d,  SRC2: %d", fake_ROB[dispatch_Q[i]].seq_Number, fake_ROB[dispatch_Q[i]].src_Reg_1, fake_ROB[dispatch_Q[i]].src_Reg_2);
+						if(fake_ROB[dispatch_Q[i]].src_Reg_1 != -1)
 						{
-							//printf("\nDipatching Instr: %d into sched-Q[%d]", fake_ROB[dispatch_Q[i]].seq_Number, tempPos );
-							sched_Q[tempPos] = dispatch_Q[i];
-							sched_Q_size++;
-							dispatch_Q_Size--;
-
-							//minTagValue += 1;
-							
-							fake_ROB[dispatch_Q[i]].intr_state = IS;
-
-							src1Ready = NOTREADY;
-							src2Ready = NOTREADY;
-
-							
-							//printf("\nInstr: %d  has SRC1: %d,  SRC2: %d", fake_ROB[dispatch_Q[i]].seq_Number, fake_ROB[dispatch_Q[i]].src_Reg_1, fake_ROB[dispatch_Q[i]].src_Reg_2);
-							if(fake_ROB[dispatch_Q[i]].src_Reg_1 != -1)
+							if( fake_ROB[dispatch_Q[i]].src_Reg_1_state == READY)
 							{
-								if( fake_ROB[dispatch_Q[i]].src_Reg_1_state == READY)
-								{
-									src1Ready = READY;
-									//printf("\nSRC_REG_STATE_1 Ready");
-								}
-								else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].ready == READY)
-								{
-									src1Ready = READY;
-									fake_ROB[dispatch_Q[i]].src_Reg_1_state = READY;
-									//printf("\nREG_TABLE[src_reg_1] Ready");
-								}
-								else
-								{
-									src1Ready = NOTREADY;
-									fake_ROB[dispatch_Q[i]].src_Reg_1 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].tag; 
-									//printf("\nREG_TABLE[src_reg_1] NOT READY");
-								}
+								src1Ready = READY;
+								//printf("\nSRC_REG_STATE_1 Ready");
 							}
-							else
+							else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].ready == READY)
 							{
 								src1Ready = READY;
 								fake_ROB[dispatch_Q[i]].src_Reg_1_state = READY;
-								//printf("\nSRC_REG_1 =-1 => Ready");
-							}
-							
-							
-							if(fake_ROB[dispatch_Q[i]].src_Reg_2 != -1)
-							{
-								if( fake_ROB[dispatch_Q[i]].src_Reg_2_state == READY)
-								{
-									src2Ready = READY;
-									//printf("\nSRC_REG_STATE_2 Ready");
-								}
-								else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].ready == READY)
-								{
-									src2Ready = READY;
-									fake_ROB[dispatch_Q[i]].src_Reg_2_state = READY;
-									//printf("\nREG_TABLE[src_reg_2] Ready");
-								}
-								else
-								{
-									src2Ready = NOTREADY;
-									fake_ROB[dispatch_Q[i]].src_Reg_2 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].tag;
-									//printf("\nREG_TABLE[src_reg_2] NOT READY");
-								}
-									
+								//printf("\nREG_TABLE[src_reg_1] Ready");
 							}
 							else
+							{
+								src1Ready = NOTREADY;
+								fake_ROB[dispatch_Q[i]].src_Reg_1 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].tag; 
+								//printf("\nREG_TABLE[src_reg_1] NOT READY");
+							}
+						}
+						else
+						{
+							src1Ready = READY;
+							fake_ROB[dispatch_Q[i]].src_Reg_1_state = READY;
+							//printf("\nSRC_REG_1 =-1 => Ready");
+						}
+						
+						
+						if(fake_ROB[dispatch_Q[i]].src_Reg_2 != -1)
+						{
+							if( fake_ROB[dispatch_Q[i]].src_Reg_2_state == READY)
+							{
+								src2Ready = READY;
+								//printf("\nSRC_REG_STATE_2 Ready");
+							}
+							else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].ready == READY)
 							{
 								src2Ready = READY;
 								fake_ROB[dispatch_Q[i]].src_Reg_2_state = READY;
-								//printf("\nSRC_REG_2 =-1 => Ready");
-							}
-
-
-							if( (src1Ready == READY) && (src2Ready == READY) )
-							{
-								//printf("\nDISPATCH(): Instr :%d is ready", fake_ROB[dispatch_Q[i]].seq_Number);
-								fake_ROB[dispatch_Q[i]].readyState = READY;
+								//printf("\nREG_TABLE[src_reg_2] Ready");
 							}
 							else
 							{
-								//printf("\nDISPATCH(): Instr :%d is NOT READY", fake_ROB[dispatch_Q[i]].seq_Number);
-								fake_ROB[dispatch_Q[i]].readyState = NOTREADY;
+								src2Ready = NOTREADY;
+								fake_ROB[dispatch_Q[i]].src_Reg_2 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].tag;
+								//printf("\nREG_TABLE[src_reg_2] NOT READY");
 							}
+								
+						}
+						else
+						{
+							src2Ready = READY;
+							fake_ROB[dispatch_Q[i]].src_Reg_2_state = READY;
+							//printf("\nSRC_REG_2 =-1 => Ready");
+						}
 
 
-							if(fake_ROB[dispatch_Q[i]].destn_Reg != -1)
-							{
-								register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].ready = NOTREADY;
-								//check here 
-								register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].tag = dispatch_Q[i];
-								//printf("\nDestn Reg: %d Is NOT Ready", fake_ROB[dispatch_Q[i]].destn_Reg);
-							}
-							
-							fake_ROB[dispatch_Q[i]].issue_Begin_Cycle = count_Cycle;
+						if( (src1Ready == READY) && (src2Ready == READY) )
+						{
+							//printf("\nDISPATCH(): Instr :%d is ready", fake_ROB[dispatch_Q[i]].seq_Number);
+							fake_ROB[dispatch_Q[i]].readyState = READY;
+						}
+						else
+						{
+							//printf("\nDISPATCH(): Instr :%d is NOT READY", fake_ROB[dispatch_Q[i]].seq_Number);
+							fake_ROB[dispatch_Q[i]].readyState = NOTREADY;
+						}
 
-							dispatch_Q[i] = -1;
 
+						if(fake_ROB[dispatch_Q[i]].destn_Reg != -1)
+						{
+							register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].ready = NOTREADY;
+							//check here 
+							register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].tag = dispatch_Q[i];
+							//printf("\nDestn Reg: %d Is NOT Ready", fake_ROB[dispatch_Q[i]].destn_Reg);
 						}
 						
+						fake_ROB[dispatch_Q[i]].issue_Begin_Cycle = count_Cycle;
+
+						dispatch_Q[i] = -1;
+
 					}
+					
 				}
 			}
-			else
-			{
-				break;
-			}
+		}
+		else
+		{
+			break;
 		}
 	}
 
