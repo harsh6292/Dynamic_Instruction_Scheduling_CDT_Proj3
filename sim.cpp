@@ -1,12 +1,7 @@
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
-#include<math.h>
-#include<limits.h>
+#include "sim.h"
 
 
 enum instrn_state_t {IF, ID, IS, EX, WB};
-//enum instrn_state_t {IF=0, ID=1, IS=2, EX=3, WB=4};
 enum reg_State_t {READY, NOTREADY};
 
 class Fake_ROB_Class
@@ -48,23 +43,6 @@ class Register_File_Class
 }register_File_Table[128];
 
 
-struct BTB
-{
-	unsigned int size;
-	unsigned int assoc;
-	unsigned int blocksize;
-	unsigned int numOfSets;
-
-	unsigned int* tagArray;
-	int* LRUCounter;
-
-	unsigned int branchCounter;
-	unsigned int BTBMissButBranchTaken;
-	unsigned int noOfPredictionsFromBTB;
-};
-
-
-
 
 
 unsigned int global_Seq_num 	= 0;
@@ -76,9 +54,6 @@ unsigned int max_S_value		= 0;
 unsigned int sched_Q_size 		= 0;
 
 unsigned int issue_List_Size	= 0;
-unsigned int IS_List_Size_OP_0	= 0;
-unsigned int IS_List_Size_OP_1	= 0;
-unsigned int IS_List_Size_OP_2	= 0;
 
 unsigned int minTagValue 		= 0;
 unsigned int minTagISVal		= 0;
@@ -93,8 +68,8 @@ void init_Register_table();
 int return_Fake_ROB_pos();
 void fetch(FILE *traceFile, int *dispatch_Q);
 void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q);
-void issue(FILE *traceFile, int*, int*, int*, int*);
-void execute(FILE *traceFile, int*, int*, int*, int*);
+void issue(FILE *traceFile, int*, int*);
+void execute(FILE *traceFile, int*, int*);
 void fake_retire();
 int advance_cycle();
 int return_Queue_position(int *queue, int maxSize);
@@ -102,23 +77,17 @@ void insertionSortList(int *array, int sizeOfArray);
 
 
 
-
-
-
-
-
-int count_Cycle = 0;
+int count_Cycle = 0, max_Latency = 0;
 
 
 int main(int agrc, char* argv[])
 {
 
-	int 			i = 0;//, count = 0;
+	int 			i = 0, noOfTagEntries = 0, j =0;
 	unsigned int 	blockSize = 0, cache_L1_size = 0, cache_L2_size = 0;
 	unsigned int 	cache_L1_assoc = 0, cache_L2_assoc = 0, size_N = 0, sched_size = 0;
 	char 			*traceFileName;
 	FILE 			*traceFile;
-	//Fake_ROB_Class	fake_ROB[1024];
 
 	sched_size 		= 	atoi(argv[1]);
 	size_N			= 	atoi(argv[2]);
@@ -130,33 +99,91 @@ int main(int agrc, char* argv[])
 	traceFileName 	= 	argv[8];
 
 
+
+	if( cache_L1_size == 0 )
+	{
+		max_Latency = 5;
+		l1Cache.c_size = cache_L1_size;
+	}
+	else
+	{
+		max_Latency = 20;
+		l1Cache.c_blocksize = blockSize;
+		l1Cache.c_size = cache_L1_size;
+		l1Cache.c_assoc = cache_L1_assoc;
+		
+		l1Cache.c_numOfSets = (l1Cache.c_size/(l1Cache.c_blocksize*l1Cache.c_assoc));
+	
+		//Initialize L1 Cache
+		noOfTagEntries = (l1Cache.c_numOfSets*l1Cache.c_assoc);
+		l1Cache.c_tagArray = (unsigned int*)malloc( (noOfTagEntries*sizeof(unsigned int)) );
+		l1Cache.valid_in_bit = (unsigned int*)malloc( (noOfTagEntries*sizeof(unsigned int)) );
+		l1Cache.LRUCounter = (int*)malloc( (noOfTagEntries*sizeof(int)) );
+
+		memset( l1Cache.c_tagArray, 0, (sizeof(l1Cache.c_tagArray[0])*noOfTagEntries) );
+		memset( l1Cache.valid_in_bit, 0, (sizeof(l1Cache.valid_in_bit[0])*noOfTagEntries) );
+		memset( l1Cache.LRUCounter, 0, (sizeof(l1Cache.LRUCounter[0])*noOfTagEntries) );
+
+
+		l1Cache.level = 1;
+		l1Cache.readCounter = 0;
+		l1Cache.readMissCounter = 0;
+		l1Cache.nextLevel = NULL;
+		
+	}
+	
+	if( cache_L2_size != 0 )
+	{
+		l2Cache.c_blocksize = blockSize;
+		l2Cache.c_size = cache_L2_size;
+		l2Cache.c_assoc = cache_L2_assoc;
+		l1Cache.nextLevel = &l2Cache;
+		
+		
+		
+		l2Cache.c_numOfSets = (l2Cache.c_size/(l2Cache.c_blocksize*l2Cache.c_assoc));
+		
+		noOfTagEntries = l2Cache.c_numOfSets*l2Cache.c_assoc;
+		l2Cache.c_tagArray = (unsigned int*)malloc( (noOfTagEntries*sizeof(unsigned int)) );
+		l2Cache.valid_in_bit = (unsigned int*)malloc( (noOfTagEntries*sizeof(unsigned int)) );
+		l2Cache.LRUCounter = (int*)malloc( (noOfTagEntries*sizeof(int)) );
+
+
+		memset( l2Cache.c_tagArray, 0, (sizeof(l2Cache.c_tagArray[0])*noOfTagEntries) );
+		memset( l2Cache.valid_in_bit, 0, (sizeof(l2Cache.valid_in_bit[0])*noOfTagEntries) );
+		memset( l2Cache.LRUCounter, 0, (sizeof(l2Cache.LRUCounter[0])*noOfTagEntries) );
+
+
+		l2Cache.level = 2;
+		l2Cache.readCounter = 0;
+		l2Cache.readMissCounter = 0;
+	}
+	else
+	{
+		l2Cache.c_size = cache_L2_size;
+	}
+	
+	
 	peak_N_size = size_N;
 	max_S_value = sched_size;
 
 	int 	dispatch_Q[2*peak_N_size];
 	int 	sched_Q[max_S_value];
-	int 	execute_Q[peak_N_size];
-	int		exec_Q_OP_0[(peak_N_size*5)];
-	int 	exec_Q_OP_1[peak_N_size];
-	int 	exec_Q_OP_2[peak_N_size];
+	int 	execute_Q[(peak_N_size*max_Latency)];
 
-
-	for( i = 0; i<(2*peak_N_size); i++ )
+	for( i = 0; i<((int)(2*peak_N_size)); i++ )
 	{
 		dispatch_Q[i] = -1;
 	}
 
-	for( i = 0; i<max_S_value; i++ )
+	for( i = 0; i<(int)max_S_value; i++ )
 	{
 		sched_Q[i] = -1;
 	}
 
-	for( i = 0; i<(5*peak_N_size); i++ )
+	for( i = 0; i<((int)(max_Latency*peak_N_size)); i++ )
 	{
-		//execute_Q[i] = -1;
-		exec_Q_OP_0[i] = -1;
-		//exec_Q_OP_1[i] = -1;
-		//exec_Q_OP_2[i] = -1;
+		execute_Q[i] = -1;
 	}
 
 
@@ -173,55 +200,87 @@ int main(int agrc, char* argv[])
 
 	init_Register_table();
 
-	//printf("\nAfter initializing regiser tables");
-	//printf("\nAfter initializing regiser tables");
+	
 	do
 	{
 		
-		printf("\n\n\n************************  NEW_CYCLE() %d **************************\n", (count_Cycle));
-		printf("\n---------------------------------------------------------------------------FAKE-ROB----");
+		//printf("\n\n\n************************  NEW_CYCLE() %d **************************\n", (count_Cycle));
+		//printf("\n---------------------------------------------------------------------------FAKE-ROB----");
 		fake_retire();
-		printf("\nFAKE-ROB Done!");
+		//printf("\nFAKE-ROB Done!");
 		
-		printf("\n-------------------------------------------------------------EXECUTE()-----------------");
-		execute(traceFile, sched_Q, exec_Q_OP_0, exec_Q_OP_1, exec_Q_OP_2);
-		printf("\nEXECUTE() Done!, sched-Q size: %d, dispatch_Q_Size: %d, exec_Q size: %d", sched_Q_size, dispatch_Q_Size, issue_List_Size);
+		//printf("\n-------------------------------------------------------------EXECUTE()-----------------");
+		execute(traceFile, sched_Q, execute_Q);
+		//printf("\nEXECUTE() Done!, sched-Q size: %d, dispatch_Q_Size: %d, exec_Q size: %d", sched_Q_size, dispatch_Q_Size, issue_List_Size);
 		
-		printf("\n------------------------------------------------ISSUE()--------------------------------");
-		issue(traceFile, sched_Q, exec_Q_OP_0, exec_Q_OP_1, exec_Q_OP_2);
-		printf("\nISSUE() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
+		//printf("\n------------------------------------------------ISSUE()--------------------------------");
+		issue(traceFile, sched_Q, execute_Q);
+		//printf("\nISSUE() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
 		
-		printf("\n---------------------------DISPATCH()-------------------------------------------------");
+		//printf("\n---------------------------DISPATCH()-------------------------------------------------");
 		dispatch(traceFile, dispatch_Q, sched_Q);
-		printf("\nDISPATCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
+		//printf("\nDISPATCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
 		
-		printf("\n-------------FETCH()------------------------------------------------------------------");
+		//printf("\n-------------FETCH()------------------------------------------------------------------");
 		fetch(traceFile, dispatch_Q);
-		printf("\nFETCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
+		//printf("\nFETCH() Done!, sched-Q size: %d, dispatch_Q_Size: %d", sched_Q_size, dispatch_Q_Size);
 		count_Cycle++;
 		//if(count_Cycle == 200)
 			//break;
 	}while(advance_cycle() == 1);
 
-	printf("\n");
-	printf("\n\n------------------  FINISH()  -------------\n\n");
+	//printf("\n");
+//	printf("\n\n------------------  FINISH()  -------------\n\n");
 	count_Cycle--;
-	printf("\nFinal cycle count: %d", count_Cycle);
+	//printf("\nFinal cycle count: %d", count_Cycle);
 	
-	
-	printf("\nCONFIGURATION");
-	printf("\n superscalar bandwidth (N) = %d", peak_N_size);
-	printf("\n dispatch queue size (2*N) = %d", (2*peak_N_size));
-	printf("\n schedule queue size (S)   = %d", max_S_value);
-	printf("\nRESULTS");
-	printf("\n number of instructions = %d", global_Seq_num);
-	printf("\n number of cycles       = %d", count_Cycle);
-	printf("\n IPC                    = %.2f", ((double)global_Seq_num/count_Cycle) );
-	
-	printf("\n");
+	if( l1Cache.c_size!= 0)
+	{
+		printf("L1 CACHE CONTENTS\n");
+		printf("a. number of accesses :%d\n", l1Cache.readCounter);
+		printf("b. number of misses :%d\n", l1Cache.readMissCounter);
 
-
-	return 0;
+		for( i=0; i<(int)l1Cache.c_numOfSets; i++)
+		{		
+			printf("set %d	:", i);
+			for( j=0; j<(int)l1Cache.c_assoc; j++)
+			{
+				printf("%-10x",l1Cache.c_tagArray[i + (j*l1Cache.c_numOfSets)]);
+			}
+			printf("\n");
+		}
+		printf("\n");
+	}
+	
+	
+	if( l2Cache.c_size!= 0)
+	{
+		printf("L2 CACHE CONTENTS\n");
+		printf("a. number of accesses :%d\n", l2Cache.readCounter);
+		printf("b. number of misses :%d\n", l2Cache.readMissCounter);
+		for( i=0; i<(int)l2Cache.c_numOfSets; i++)
+		{
+			printf("set %d: ", i);
+			for( j=0; j<(int)l2Cache.c_assoc; j++)
+			{
+				printf("%-10x",l2Cache.c_tagArray[i + (j*l2Cache.c_numOfSets)]);
+			}
+			printf("\n");
+		}
+		printf("\n");
+	}
+	
+	
+	printf("CONFIGURATION\n");
+	printf(" superscalar bandwidth (N) = %d\n", peak_N_size);
+	printf(" dispatch queue size (2*N) = %d\n", (2*peak_N_size));
+	printf(" schedule queue size (S)   = %d\n", max_S_value);
+	printf("RESULTS\n");
+	printf(" number of instructions = %d\n", global_Seq_num);
+	printf(" number of cycles       = %d\n", count_Cycle);
+	printf(" IPC                    = %.2f\n", ((double)global_Seq_num/count_Cycle) );
+	
+	return(0);
 	
 }
 
@@ -249,13 +308,14 @@ int return_Fake_ROB_pos()
 			return(i);
 		}
 	}
+	return(-1);
 }
 
 
 void fetch(FILE *traceFile, int* dispatch_Q)
 {
 	char *readBuf, *tempString, *temp;
-	int instructionsToRead = 0, tempInt = 0, i = 0, position = 0, qPos = 0;
+	int instructionsToRead = 0, i = 0, position = 0, qPos = 0;
 	
 	
 	if( peak_N_size > ((peak_N_size*2) - dispatch_Q_Size) )
@@ -268,8 +328,7 @@ void fetch(FILE *traceFile, int* dispatch_Q)
 	}
 	
 	
-	 
-	printf("\nDispatch_Q_Size: %d, peak_N*2: %d, intrn to read: %d", dispatch_Q_Size, (2*peak_N_size), instructionsToRead);
+	//printf("\nDispatch_Q_Size: %d, peak_N*2: %d, intrn to read: %d", dispatch_Q_Size, (2*peak_N_size), instructionsToRead);
 
 	readBuf = (char*)malloc(sizeof(char)*100);
 	
@@ -282,60 +341,62 @@ void fetch(FILE *traceFile, int* dispatch_Q)
 			break;
 		}
 
-		position = return_Fake_ROB_pos();
-		//printf("\nPosition returned: %d", position);
-		tempString = strtok(readBuf, " ");
-		fake_ROB[position].intr_state = IF;
-		fake_ROB[position].prog_Counter = strtoll(tempString, NULL, 16);
-		
-		tempString = strtok(NULL, " ");
-		fake_ROB[position].operation_t = atoi(tempString);
-		
-		tempString = strtok(NULL, " ");
-		fake_ROB[position].destn_Reg = atoi(tempString);
-		
-		tempString = strtok(NULL, " ");
-		fake_ROB[position].src_Reg_1 = atoi(tempString);
-		fake_ROB[position].orig_Src_Reg_1 = atoi(tempString);
-		
-		tempString = strtok(NULL, " ");
-		fake_ROB[position].src_Reg_2 = atoi(tempString);
-		fake_ROB[position].orig_Src_Reg_2 = atoi(tempString);
-		
-		tempString = strtok(NULL, " \n");
-		fake_ROB[position].mem_Address = strtoll(tempString, NULL, 16);
-		
-		fake_ROB[position].seq_Number = global_Seq_num;
-
-
-		fake_ROB[position].src_Reg_1_state = NOTREADY;
-		fake_ROB[position].src_Reg_2_state = NOTREADY;
-		fake_ROB[position].readyState = NOTREADY;
-		fake_ROB[position].valid_Entry = 2;
-		fake_ROB[position].fetch_Begin_Cycle = count_Cycle;
-
-		if( fake_ROB[position].operation_t == 0)
+		if( (position = return_Fake_ROB_pos()) != -1 )
 		{
-			fake_ROB[position].latency = 1;
-		}
-		else if( fake_ROB[position].operation_t == 1)
-		{
-			fake_ROB[position].latency = 2;
-		}
-		else if( fake_ROB[position].operation_t == 2)
-		{
-			fake_ROB[position].latency = 5;
-		}
+			//printf("\nPosition returned: %d", position);
+			tempString = strtok(readBuf, " ");
+			fake_ROB[position].intr_state = IF;
+			fake_ROB[position].prog_Counter = strtoll(tempString, NULL, 16);
+			
+			tempString = strtok(NULL, " ");
+			fake_ROB[position].operation_t = atoi(tempString);
+			
+			tempString = strtok(NULL, " ");
+			fake_ROB[position].destn_Reg = atoi(tempString);
+			
+			tempString = strtok(NULL, " ");
+			fake_ROB[position].src_Reg_1 = atoi(tempString);
+			fake_ROB[position].orig_Src_Reg_1 = atoi(tempString);
+			
+			tempString = strtok(NULL, " ");
+			fake_ROB[position].src_Reg_2 = atoi(tempString);
+			fake_ROB[position].orig_Src_Reg_2 = atoi(tempString);
+			
+			tempString = strtok(NULL, " \n");
+			fake_ROB[position].mem_Address = strtoll(tempString, NULL, 16);
+			
+			fake_ROB[position].seq_Number = global_Seq_num;
 
-		
-		qPos = return_Queue_position(dispatch_Q, (2*peak_N_size));
-		dispatch_Q[qPos] = position;
-		
-		printf("\nFETCH(): Dispatch_Q[%d]: %d  <--Instrn", qPos, fake_ROB[position].seq_Number);
-		
-		dispatch_Q_Size++;
-		global_Seq_num = (global_Seq_num + 1);
-		i++;
+
+			fake_ROB[position].src_Reg_1_state = NOTREADY;
+			fake_ROB[position].src_Reg_2_state = NOTREADY;
+			fake_ROB[position].readyState = NOTREADY;
+			fake_ROB[position].valid_Entry = 2;
+			fake_ROB[position].fetch_Begin_Cycle = count_Cycle;
+
+			if( fake_ROB[position].operation_t == 0)
+			{
+				fake_ROB[position].latency = 1;
+			}
+			else if( fake_ROB[position].operation_t == 1)
+			{
+				fake_ROB[position].latency = 2;
+			}
+			else if( fake_ROB[position].operation_t == 2)
+			{
+				fake_ROB[position].latency = 5;
+			}
+
+			
+			qPos = return_Queue_position(dispatch_Q, (2*peak_N_size));
+			dispatch_Q[qPos] = position;
+			
+			//printf("\nFETCH(): Dispatch_Q[%d]: %d  <--Instrn", qPos, fake_ROB[position].seq_Number);
+			
+			dispatch_Q_Size++;
+			global_Seq_num = (global_Seq_num + 1);
+			i++;
+		}
 	}
 
 }
@@ -361,7 +422,7 @@ int return_Queue_position(int *queue, int maxSize)
 
 void insertionSortList(int *array, int sizeOfArray)
 {
-	int i = 0, j = 0, temp = 0, key = 0, count = 0;
+	int i = 0, j = 0, temp = 0, count = 0;
 	int tempArray[sizeOfArray];
 	
 	
@@ -403,19 +464,17 @@ void insertionSortList(int *array, int sizeOfArray)
 
 void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 {
-	int i = 0, j =0;
-	int minTag = 0, instrn_In_SchedQ = 0, tempPos = 0;
+	int i = 0, tempPos = 0;
 	reg_State_t src1Ready, src2Ready;
+
 	src1Ready = NOTREADY;
 	src2Ready = NOTREADY;
-
-	int tempListInstrnID[dispatch_Q_Size];
 
 	
 	insertionSortList(dispatch_Q, (2*peak_N_size) );
 	
 	{
-		for( i =0; i<(2*peak_N_size); i++)
+		for( i =0; i<((int)(2*peak_N_size)); i++)
 		{
 			if(sched_Q_size < max_S_value)
 			{
@@ -427,7 +486,7 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 					{
 						if( (tempPos = return_Queue_position(sched_Q, max_S_value)) != -1)
 						{
-							printf("\nDipatching Instr: %d into sched-Q[%d]", fake_ROB[dispatch_Q[i]].seq_Number, tempPos );
+							//printf("\nDipatching Instr: %d into sched-Q[%d]", fake_ROB[dispatch_Q[i]].seq_Number, tempPos );
 							sched_Q[tempPos] = dispatch_Q[i];
 							sched_Q_size++;
 							dispatch_Q_Size--;
@@ -440,32 +499,32 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 							src2Ready = NOTREADY;
 
 							
-							printf("\nInstr: %d  has SRC1: %d,  SRC2: %d", fake_ROB[dispatch_Q[i]].seq_Number, fake_ROB[dispatch_Q[i]].src_Reg_1, fake_ROB[dispatch_Q[i]].src_Reg_2);
+							//printf("\nInstr: %d  has SRC1: %d,  SRC2: %d", fake_ROB[dispatch_Q[i]].seq_Number, fake_ROB[dispatch_Q[i]].src_Reg_1, fake_ROB[dispatch_Q[i]].src_Reg_2);
 							if(fake_ROB[dispatch_Q[i]].src_Reg_1 != -1)
 							{
 								if( fake_ROB[dispatch_Q[i]].src_Reg_1_state == READY)
 								{
 									src1Ready = READY;
-									printf("\nSRC_REG_STATE_1 Ready");
+									//printf("\nSRC_REG_STATE_1 Ready");
 								}
 								else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].ready == READY)
 								{
 									src1Ready = READY;
 									fake_ROB[dispatch_Q[i]].src_Reg_1_state = READY;
-									printf("\nREG_TABLE[src_reg_1] Ready");
+									//printf("\nREG_TABLE[src_reg_1] Ready");
 								}
 								else
 								{
 									src1Ready = NOTREADY;
 									fake_ROB[dispatch_Q[i]].src_Reg_1 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_1].tag; 
-									printf("\nREG_TABLE[src_reg_1] NOT READY");
+									//printf("\nREG_TABLE[src_reg_1] NOT READY");
 								}
 							}
 							else
 							{
 								src1Ready = READY;
 								fake_ROB[dispatch_Q[i]].src_Reg_1_state = READY;
-								printf("\nSRC_REG_1 =-1 => Ready");
+								//printf("\nSRC_REG_1 =-1 => Ready");
 							}
 							
 							
@@ -474,19 +533,19 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 								if( fake_ROB[dispatch_Q[i]].src_Reg_2_state == READY)
 								{
 									src2Ready = READY;
-									printf("\nSRC_REG_STATE_2 Ready");
+									//printf("\nSRC_REG_STATE_2 Ready");
 								}
 								else if( register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].ready == READY)
 								{
 									src2Ready = READY;
 									fake_ROB[dispatch_Q[i]].src_Reg_2_state = READY;
-									printf("\nREG_TABLE[src_reg_2] Ready");
+									//printf("\nREG_TABLE[src_reg_2] Ready");
 								}
 								else
 								{
 									src2Ready = NOTREADY;
 									fake_ROB[dispatch_Q[i]].src_Reg_2 = register_File_Table[fake_ROB[dispatch_Q[i]].src_Reg_2].tag;
-									printf("\nREG_TABLE[src_reg_2] NOT READY");
+									//printf("\nREG_TABLE[src_reg_2] NOT READY");
 								}
 									
 							}
@@ -494,18 +553,18 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 							{
 								src2Ready = READY;
 								fake_ROB[dispatch_Q[i]].src_Reg_2_state = READY;
-								printf("\nSRC_REG_2 =-1 => Ready");
+								//printf("\nSRC_REG_2 =-1 => Ready");
 							}
 
 
 							if( (src1Ready == READY) && (src2Ready == READY) )
 							{
-								printf("\nDISPATCH(): Instr :%d is ready", fake_ROB[dispatch_Q[i]].seq_Number);
+								//printf("\nDISPATCH(): Instr :%d is ready", fake_ROB[dispatch_Q[i]].seq_Number);
 								fake_ROB[dispatch_Q[i]].readyState = READY;
 							}
 							else
 							{
-								printf("\nDISPATCH(): Instr :%d is NOT READY", fake_ROB[dispatch_Q[i]].seq_Number);
+								//printf("\nDISPATCH(): Instr :%d is NOT READY", fake_ROB[dispatch_Q[i]].seq_Number);
 								fake_ROB[dispatch_Q[i]].readyState = NOTREADY;
 							}
 
@@ -515,7 +574,7 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 								register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].ready = NOTREADY;
 								//check here 
 								register_File_Table[fake_ROB[dispatch_Q[i]].destn_Reg].tag = dispatch_Q[i];
-								printf("\nDestn Reg: %d Is NOT Ready", fake_ROB[dispatch_Q[i]].destn_Reg);
+								//printf("\nDestn Reg: %d Is NOT Ready", fake_ROB[dispatch_Q[i]].destn_Reg);
 							}
 							
 							fake_ROB[dispatch_Q[i]].issue_Begin_Cycle = count_Cycle;
@@ -536,7 +595,7 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 
 
 
-	for( i =0; i<(2*peak_N_size); i++)
+	for( i =0; i<((int)(2*peak_N_size)); i++)
 	{
 		
 		if( dispatch_Q[i] != -1 )
@@ -544,7 +603,7 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 			
 			if( fake_ROB[dispatch_Q[i]].intr_state == IF )
 			{
-				printf("\nIF -> ID, Decoding Instrn: %d", fake_ROB[dispatch_Q[i]].seq_Number);
+				//printf("\nIF -> ID, Decoding Instrn: %d", fake_ROB[dispatch_Q[i]].seq_Number);
 				fake_ROB[dispatch_Q[i]].intr_state = ID;
 				fake_ROB[dispatch_Q[i]].decode_Begin_Cycle = count_Cycle;
 			}
@@ -556,11 +615,11 @@ void dispatch(FILE *traceFile, int *dispatch_Q, int *sched_Q)
 
 
 
-void issue(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, int *exec_Q_OP_2)
+void issue(FILE *traceFile, int *sched_Q, int *execute_Q)
 {
-	int i = 0, j = 0, tempPos = 0;
-	int minTag = 0, instrn_In_SchedQ = 0;
+	int i = 0, j = 0, tempPos = 0, getVal = 0;
 	reg_State_t src1Ready, src2Ready;
+	
 	src1Ready = NOTREADY;
 	src2Ready = NOTREADY;
 
@@ -571,9 +630,9 @@ void issue(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, in
 	i = 0;
 	j = 0;
 	//For operation type 2
-	for( i = 0; i<max_S_value; i++) //while( j < peak_N_size)
+	for( i = 0; i< (int)max_S_value; i++) //while( j < peak_N_size)
 	{
-		if( j < peak_N_size)	//for( i = 0; i<max_S_value; i++)
+		if( j < (int)peak_N_size)	//for( i = 0; i<max_S_value; i++)
 		{
 		
 			//printf("\nISSUE(): Sched_q[%d]: %d,  j: %d", i, sched_Q[i], j);
@@ -582,17 +641,56 @@ void issue(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, in
 			{
 				if( (fake_ROB[sched_Q[i]].readyState == READY) )//&& (fake_ROB[sched_Q[i]].operation_t == 2) ) //fake_ROB[sched_Q[i]].seq_Number == minTagISVal)
 				{
-					if( (tempPos = return_Queue_position(exec_Q_OP_0, (5*peak_N_size))) != -1)
+					if( (tempPos = return_Queue_position(execute_Q, (5*peak_N_size))) != -1)
 					{
 						
-						printf("\nISSUE(): OP-2  .... Instruction  %d is ready", fake_ROB[sched_Q[i]].seq_Number);
-						exec_Q_OP_0[tempPos] = sched_Q[i];
-						printf("			ISSUE(): exec_Q[%d]: %d", tempPos, fake_ROB[exec_Q_OP_0[tempPos]].seq_Number);
-						IS_List_Size_OP_0++;
-						//issue_List_Size++;
+						//printf("\nISSUE(): OP-2  .... Instruction  %d is ready", fake_ROB[sched_Q[i]].seq_Number);
+						execute_Q[tempPos] = sched_Q[i];
+						//printf("			ISSUE(): exec_Q[%d]: %d", tempPos, fake_ROB[execute_Q[tempPos]].seq_Number);
+						
+						issue_List_Size++;
 						sched_Q_size--;
 
 						//minTagISVal += 1;
+						
+						
+						
+						if(fake_ROB[sched_Q[i]].operation_t == 2)
+						{
+							
+							if( l1Cache.c_size != 0)
+							{
+								
+								getVal = readFromAddress(&l1Cache, fake_ROB[sched_Q[i]].mem_Address);
+								
+								//A return value of 0 indicates that the address was hit in L1 Cache
+								if( getVal == 0 )
+								{
+									fake_ROB[sched_Q[i]].latency = 5;
+								}
+								
+								//A return value of 1 indicates that the address was miss in L1 Cache but hit in L2 cache
+								if( getVal == 1 )
+								{
+									fake_ROB[sched_Q[i]].latency = 10;
+								}
+								
+								//A return value of 2 indicates that the address was miss both in L1 & L2 Cache
+								if( getVal == 2 )
+								{
+									fake_ROB[sched_Q[i]].latency = 20;
+								}
+							}
+						}
+						
+						
+						
+						
+						
+						
+						
+						
+						
 
 						fake_ROB[sched_Q[i]].intr_state = EX;
 						fake_ROB[sched_Q[i]].execute_Begin_Cycle = count_Cycle;
@@ -615,54 +713,54 @@ void issue(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, in
 
 
 
-void execute(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, int *exec_Q_OP_2)
+void execute(FILE *traceFile, int *sched_Q, int *execute_Q)
 {
 	int i = 0, j = 0;
 
 	
 	
 	
-	for( i = 0; i< (5*peak_N_size); i++)
+	for( i = 0; i< ((int)(max_Latency*peak_N_size)); i++)
 	{
 		
 		
 		
 		//For operation type 0
-		if(exec_Q_OP_0[i] != -1)
+		if(execute_Q[i] != -1)
 		{
 			
-			if( fake_ROB[exec_Q_OP_0[i]].latency >0 )
+			if( fake_ROB[execute_Q[i]].latency >0 )
 			{
-				fake_ROB[exec_Q_OP_0[i]].latency = (fake_ROB[exec_Q_OP_0[i]].latency - 1);
+				fake_ROB[execute_Q[i]].latency = (fake_ROB[execute_Q[i]].latency - 1);
 			}
 			
 			
-			printf("\nEXECUTE(): OP-0   Instr: exec_Q[%d]: %d   has latency: %d", i, fake_ROB[exec_Q_OP_0[i]].seq_Number, fake_ROB[exec_Q_OP_0[i]].latency);
-			if( (fake_ROB[exec_Q_OP_0[i]].latency == 0) && (fake_ROB[exec_Q_OP_0[i]].intr_state == EX))
+			//printf("\nEXECUTE(): OP-0   Instr: exec_Q[%d]: %d   has latency: %d", i, fake_ROB[execute_Q[i]].seq_Number, fake_ROB[execute_Q[i]].latency);
+			if( (fake_ROB[execute_Q[i]].latency == 0) && (fake_ROB[execute_Q[i]].intr_state == EX))
 			{
-				printf("\nEXECUTE(): Executing Instr..............: %d", fake_ROB[exec_Q_OP_0[i]].seq_Number);
+				//printf("\nEXECUTE(): Executing Instr..............: %d", fake_ROB[execute_Q[i]].seq_Number);
 				
-				fake_ROB[exec_Q_OP_0[i]].intr_state = WB;
-				IS_List_Size_OP_0--;
+				fake_ROB[execute_Q[i]].intr_state = WB;
+				issue_List_Size--;
 				
 				
-				printf("\nMaking Destn reg: %d   ready if reg[tag]%d matches this instruction %d    ----------====", fake_ROB[exec_Q_OP_0[i]].destn_Reg, register_File_Table[fake_ROB[exec_Q_OP_0[i]].destn_Reg].tag, exec_Q_OP_0[i]);
-				if(fake_ROB[exec_Q_OP_0[i]].destn_Reg != -1)
+				//printf("\nMaking Destn reg: %d   ready if reg[tag]%d matches this instruction %d    ----------====", fake_ROB[execute_Q[i]].destn_Reg, register_File_Table[fake_ROB[execute_Q[i]].destn_Reg].tag, execute_Q[i]);
+				if(fake_ROB[execute_Q[i]].destn_Reg != -1)
 				{
-					if( register_File_Table[fake_ROB[exec_Q_OP_0[i]].destn_Reg].tag == exec_Q_OP_0[i] )
+					if( register_File_Table[fake_ROB[execute_Q[i]].destn_Reg].tag == execute_Q[i] )
 					{
-						register_File_Table[fake_ROB[exec_Q_OP_0[i]].destn_Reg].ready = READY;
-						printf("\nTag and instruction mathces, Making destn reg READY    ----------****");
+						register_File_Table[fake_ROB[execute_Q[i]].destn_Reg].ready = READY;
+						//printf("\nTag and instruction mathces, Making destn reg READY    ----------****");
 					}
 					
 				}
 				
 				
-				fake_ROB[exec_Q_OP_0[i]].wb_Begin_Cycle = count_Cycle;
+				fake_ROB[execute_Q[i]].wb_Begin_Cycle = count_Cycle;
 				
 
 				
-				for( j = 0; j<max_S_value; j++)
+				for( j = 0; j< (int)max_S_value; j++)
 				{
 					if( (sched_Q[j]!=-1) && (fake_ROB[sched_Q[j]].readyState == NOTREADY) )
 					{
@@ -672,15 +770,15 @@ void execute(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, 
 						{
 							//printf("\nEXECUTE(): Instr: %d, is in IS state", sched_Q[j]);
 							
-							if( fake_ROB[sched_Q[j]].src_Reg_1 == exec_Q_OP_0[i])
+							if( fake_ROB[sched_Q[j]].src_Reg_1 == execute_Q[i])
 							{
-								printf("\nEXECUTE(): Instr src_reg_1: %d ...has dependency on instr: %d", fake_ROB[sched_Q[j]].seq_Number, fake_ROB[exec_Q_OP_0[i]].seq_Number);
+								//printf("\nEXECUTE(): Instr src_reg_1: %d ...has dependency on instr: %d", fake_ROB[sched_Q[j]].seq_Number, fake_ROB[execute_Q[i]].seq_Number);
 								
 								fake_ROB[sched_Q[j]].src_Reg_1_state = READY;
 							}
-							if( fake_ROB[sched_Q[j]].src_Reg_2 == exec_Q_OP_0[i])
+							if( fake_ROB[sched_Q[j]].src_Reg_2 == execute_Q[i])
 							{
-								printf("\nEXECUTE(): Instr src_reg_2: %d ...has dependency on instr: %d", fake_ROB[sched_Q[j]].seq_Number, fake_ROB[exec_Q_OP_0[i]].seq_Number);
+								//printf("\nEXECUTE(): Instr src_reg_2: %d ...has dependency on instr: %d", fake_ROB[sched_Q[j]].seq_Number, fake_ROB[execute_Q[i]].seq_Number);
 								
 								fake_ROB[sched_Q[j]].src_Reg_2_state = READY;
 							}
@@ -688,7 +786,7 @@ void execute(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, 
 							
 							if( (fake_ROB[sched_Q[j]].src_Reg_1_state == READY) && (fake_ROB[sched_Q[j]].src_Reg_2_state == READY) )
 							{
-								printf("\nEXECUTE(): Instr: %d ...is now FULLY READY-----", fake_ROB[sched_Q[j]].seq_Number);
+								//printf("\nEXECUTE(): Instr: %d ...is now FULLY READY-----", fake_ROB[sched_Q[j]].seq_Number);
 								fake_ROB[sched_Q[j]].readyState = READY;
 							}
 							
@@ -697,7 +795,7 @@ void execute(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, 
 					}
 				}
 
-				exec_Q_OP_0[i] = -1;
+				execute_Q[i] = -1;
 			}
 
 		}
@@ -711,7 +809,7 @@ void execute(FILE *traceFile, int *sched_Q, int *exec_Q_OP_0, int *exec_Q_OP_1, 
 
 void fake_retire()
 {
-	int  i = 0, position = 0, j = 0;
+	int  i = 0, j = 0;
 	int tempList[1024];
 
 	
@@ -753,7 +851,7 @@ void fake_retire()
 			{
 				if( min_Seq_num ==  fake_ROB[i].seq_Number)
 				{
-					printf("\n%d ", fake_ROB[i].seq_Number);
+					printf("%d ", fake_ROB[i].seq_Number);
 					printf("fu{%d} ", fake_ROB[i].operation_t);
 					printf("src{%d,%d} ", fake_ROB[i].orig_Src_Reg_1, fake_ROB[i].orig_Src_Reg_2);
 					printf("dst{%d} ", fake_ROB[i].destn_Reg);
@@ -761,7 +859,7 @@ void fake_retire()
 					printf("ID{%d,%d} ", fake_ROB[i].decode_Begin_Cycle, (fake_ROB[i].issue_Begin_Cycle - fake_ROB[i].decode_Begin_Cycle));
 					printf("IS{%d,%d} ", fake_ROB[i].issue_Begin_Cycle, (fake_ROB[i].execute_Begin_Cycle - fake_ROB[i].issue_Begin_Cycle));
 					printf("EX{%d,%d} ", fake_ROB[i].execute_Begin_Cycle, (fake_ROB[i].wb_Begin_Cycle - fake_ROB[i].execute_Begin_Cycle));
-					printf("WB{%d,%d} ", fake_ROB[i].wb_Begin_Cycle, (fake_ROB[i].wb_End_Cycle -fake_ROB[i].wb_Begin_Cycle ));
+					printf("WB{%d,%d}\n", fake_ROB[i].wb_Begin_Cycle, (fake_ROB[i].wb_End_Cycle -fake_ROB[i].wb_Begin_Cycle ));
 					fake_ROB[i].valid_Entry = -1;
 					
 					min_Seq_num = (fake_ROB[i].seq_Number + 1);
